@@ -429,8 +429,8 @@ class _ProfileWizardPage(qt.QWizardPage):
         skipToIncompleteLabel = qt.QLabel(_("Skip to First Incomplete Case"))
         skipToIncompleteToolTip = _(
             "When toggled, CART will skip to the first case which does not already have "
-            "and output from a previous run of the active selected job. How this is "
-            "determined depends on the active task, and may not be supported at all for some."
+            "an output from a previous run of the selected job. How this is determined "
+            "depends on the active task, and may not be supported at all for some."
         )
         skipToIncompleteCheckBox.setToolTip(skipToIncompleteToolTip)
         skipToIncompleteLabel.setToolTip(skipToIncompleteToolTip)
