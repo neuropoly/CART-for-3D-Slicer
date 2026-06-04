@@ -942,6 +942,9 @@ class CARTStandardUnit(DataUnitBase):
     ) -> None:
         super().__init__(case_data, data_path, scene)
 
+        # Initialize with a null subject ID for later
+        self.subject_id = None
+
         # Start by finding volumes, as CART cannot proceed w/o at least one
         reference_volume_key, volume_paths = self._find_volumes(case_data)
 
@@ -1223,6 +1226,10 @@ class CARTStandardUnit(DataUnitBase):
         """Hide all volumes and segmentation when focus is lost."""
         # Call the super function
         super().focus_lost()
+
+        # If we never created a subject, do not proceed
+        if self.subject_id is None:
+            return
 
         # Hide all data nodes again
         for node in itertools.chain(
