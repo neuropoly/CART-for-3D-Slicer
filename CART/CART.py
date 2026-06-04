@@ -274,7 +274,15 @@ class CARTWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         newButton = qt.QPushButton(_("New"))
         newButton.setToolTip(_("Create a new Job"))
 
-        newButton.clicked.connect(self.runNewJobSetup)
+        @qt.Slot()
+        def newButtonClicked():
+            # Create a new job from scratch
+            new_name = self.runNewJobSetup()
+            # If the new name is not None (indicating success), start it automatically
+            if new_name is not None:
+                self.logic.set_active_job(new_name)
+
+        newButton.clicked.connect(newButtonClicked)
         buttonPanelLayout.addWidget(newButton)
 
         # "Edit" button
