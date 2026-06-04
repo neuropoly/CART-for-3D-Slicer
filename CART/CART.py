@@ -340,7 +340,20 @@ class CARTWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
         ## Case Viewer/Selector ##
         caseSelector: qt.QComboBox = ctk.ctkComboBox(None)
-        caseSelector.currentIndexChanged.connect(self.logic.select_case)
+
+        @qt.Slot(int)
+        def selectCaseAt(idx: int):
+            # Track the original case as a backup
+            prior_case_idx = self.logic.current_case_idx
+            # Try to load the requested case
+            try:
+                self.logic.select_case(idx)
+            # If it failed, rollback to the original case
+            except Exception as e:
+                self.logic.select_case(prior_case_idx)
+                raise e
+
+        caseSelector.currentIndexChanged.connect(selectCaseAt)
 
         # Add them each to the panel
         layout.addWidget(previousIncompleteButton, 1)
@@ -739,6 +752,10 @@ class CARTLogic(ScriptedLoadableModuleLogic, qt.QObject):
         # Get only to prevent horrific bugs
         return self._data_manager
 
+    @property
+    def current_case_idx(self):
+        return self._data_manager.current_case_index
+
     ## Job Management ##
     @property
     def registered_jobs(self) -> dict[str, str]:
@@ -819,7 +836,14 @@ class CARTLogic(ScriptedLoadableModuleLogic, qt.QObject):
 
         # Pass the appropriate case to the task, skipping to the first "incomplete" if requested
         if self.master_profile_config.skip_to_first_incomplete:
-            unit = self.data_manager.first_incomplete(self._task_instance)
+            try:
+                unit = self.data_manager.first_incomplete(self._task_instance)
+            except Exception as e:
+                logging.error(
+                    "Failed loading first incomplete case, loading first available case instead.",
+                    exc_info=e
+                )
+                unit = self.data_manager.first()
         else:
             unit = self.data_manager.first()
         self._task_instance.receive(unit)
@@ -1017,6 +1041,9 @@ class CARTLogic(ScriptedLoadableModuleLogic, qt.QObject):
         old_idx = self._data_manager.current_case_index
         try:
             new_unit = self._data_manager.next()
+            # If there wasn't one, the index was invalid (should never happen).
+            if new_unit is None:
+                raise ValueError("Manager could not iterate to desired unit.")
             self._task_instance.receive(new_unit)
             self.caseChanged(old_idx, self._data_manager.current_case_index)
         except Exception as e:
@@ -1039,6 +1066,9 @@ class CARTLogic(ScriptedLoadableModuleLogic, qt.QObject):
         old_idx = self._data_manager.current_case_index
         try:
             new_unit = self._data_manager.next_incomplete(self._task_instance)
+            # If there wasn't one, the index was invalid (should never happen).
+            if new_unit is None:
+                raise ValueError("Manager could not iterate to desired unit.")
             self._task_instance.receive(new_unit)
             self.caseChanged(old_idx, self._data_manager.current_case_index)
         except Exception as e:
@@ -1065,6 +1095,9 @@ class CARTLogic(ScriptedLoadableModuleLogic, qt.QObject):
         old_idx = self._data_manager.current_case_index
         try:
             new_unit = self._data_manager.previous()
+            # If there wasn't one, the index was invalid (should never happen).
+            if new_unit is None:
+                raise ValueError("Manager could not iterate to desired unit.")
             self._task_instance.receive(new_unit)
             self.caseChanged(old_idx, self._data_manager.current_case_index)
         except Exception as e:
@@ -1087,6 +1120,9 @@ class CARTLogic(ScriptedLoadableModuleLogic, qt.QObject):
         old_idx = self._data_manager.current_case_index
         try:
             new_unit = self._data_manager.previous_incomplete(self._task_instance)
+            # If there wasn't one, the index was invalid (should never happen).
+            if new_unit is None:
+                raise ValueError("Manager could not iterate to desired unit.")
             self._task_instance.receive(new_unit)
             self.caseChanged(old_idx, self._data_manager.current_case_index)
         except Exception as e:
@@ -1106,6 +1142,9 @@ class CARTLogic(ScriptedLoadableModuleLogic, qt.QObject):
         # Swap to the new unit
         prior_idx = self._data_manager.current_case_index
         new_unit = self._data_manager.select_unit_at(idx)
+        # If there wasn't one, the given index was invalid.
+        if new_unit is None:
+            raise ValueError("Manager could not iterate to desired unit.")
         self._task_instance.receive(new_unit)
         self.caseChanged(prior_idx, idx)
 
