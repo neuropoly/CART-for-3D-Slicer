@@ -167,7 +167,7 @@ def load_slicer_markups(path: Path) -> list[slicer.vtkMRMLMarkupsFiducialNode]:
 
 
 def load_csv_markups(path: Path) -> list[slicer.vtkMRMLMarkupsFiducialNode]:
-    markupsNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsCurveNode")
+    markupsNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode")
     slicer.modules.markups.logic().ImportControlPointsFromCSV(
         markupsNode, str(path)
     )

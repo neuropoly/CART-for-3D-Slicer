@@ -40,6 +40,21 @@ VERSION = "0.0.2"
 
 
 class MarkupUnit(CARTStandardUnit):
+
+    def __init__(
+        self,
+        case_data: dict[str, str],
+        data_path: Path,
+        prior_data: dict = None,
+        scene: slicer.vtkMRMLScene = slicer.mrmlScene,
+    ) -> None:
+        # Replace entries in our case data w/ our custom overrides
+        if prior_data is not None:
+            for k, v in prior_data.items():
+                case_data[k] = v
+
+        super().__init__(case_data, data_path, scene)
+
     def _load_markups_nodes(self, markup_paths: dict[str, Path]) -> None:
         # Ensure each "editable" markup has a corresponding node
         for key, path in markup_paths.items():
@@ -146,6 +161,25 @@ class MarkupTask(TaskBaseClass[MarkupUnit]):
         author = self.master_profile.author
         uid = case_data['uid']
         return self._output_manager.is_unit_complete(author, uid)
+
+    def generate_prior_data_for(self, case_data: dict) -> Optional[dict]:
+        uid = case_data.get("uid")
+        case_overrides = {}
+        if self._output_manager.is_unit_complete(self.master_profile.author, uid):
+            for k in case_data.keys():
+                # Skip non-markup resources
+                if not MarkupResource.is_type(k):
+                    continue
+                output_file = self._output_manager.determine_output_file(
+                    self.job_profile.output_path,
+                    uid,
+                    None,
+                    k,
+                )
+                if output_file.exists():
+                    case_overrides[k] = output_file
+
+        return case_overrides
 
     @classmethod
     def getDataUnitFactory(cls) -> DataUnitFactory:
@@ -267,13 +301,12 @@ class MarkupOutput:
 
         return log_data
 
-    def save_unit(self, data_unit: MarkupUnit, profile: MasterProfileConfig) -> str:
-        # Define (and, if need be, create) an output folder for this unit's case ID
-        case_output = self.output_dir / data_unit.uid
-
+    def save_unit(self, data_unit: MarkupUnit, profile: MasterProfileConfig):
         try:
+            # Variable init, which should be filled in during the loop
+            output_file = None
+
             # Save each markup node (with any modifications) into it
-            unknown_idx = 0
             for key, node in data_unit.markup_nodes.items():
                 # Determine how the file should be named
                 storage_node = node.GetStorageNode()
@@ -286,16 +319,13 @@ class MarkupOutput:
                     else:
                         input_path = Path(input_path)
 
+                uid = data_unit.uid
                 output_file = self.determine_output_file(
-                    case_output, data_unit, input_path, key, unknown_idx
+                    self.output_dir, uid, input_path, key
                 )
 
                 # Create the corresponding parent directory, if needed
                 output_file.parent.mkdir(parents=True, exist_ok=True)
-
-                # Delete any previous sidecar file associated with our output to avoid unintentional carry-over
-                prior_sidecar = find_json_sidecar_path(output_file)
-                prior_sidecar.unlink(missing_ok=True)
 
                 # Save the node's contents to this file
                 if self._config_reference.output_format == MarkupOutputFormat.NIFTI:
@@ -337,7 +367,7 @@ class MarkupOutput:
                 self.AUTHOR_KEY: profile.author,
                 self.UID_KEY: data_unit.uid,
                 self.TIMESTAMP_KEY: timestamp,
-                self.OUTPUT_KEY: str(case_output.resolve()),
+                self.OUTPUT_KEY: str(output_file.resolve()),
                 self.VERSION_KEY: VERSION,
             }
             # Save the new contents to file
@@ -365,11 +395,10 @@ class MarkupOutput:
 
     def determine_output_file(
         self,
-        case_output: Path,
-        data_unit: MarkupUnit,
+        output_dir: Path,
+        uid: str,
         input_path: Optional[Path],
-        key: str,
-        unknown_idx: int,
+        label: str
     ) -> Path:
         # Determine the appropriate extension for the file
         if self._config_reference.output_format == MarkupOutputFormat.JSON:
@@ -384,29 +413,27 @@ class MarkupOutput:
 
         # If this is a node w/o a previous file name, save it as such
         if input_path is None:
-            file_name = f"{data_unit.uid}_{key}_{unknown_idx}.{extension}"
-            unknown_idx += 1
+            file_name = f"{uid}_{label}.{extension}"
         else:
             original_name = input_path.name.split(".")[0]
             file_name = f"{original_name}.{extension}"
 
         # Determine the output directory
         if self._config_reference.output_structure == MarkupOutputStructure.BIDS:
-            uid = data_unit.uid
             # Split the "subject" and "session" parts of the UID, if they're present
             if "sub" in uid and "ses" in uid:
                 sub, ses = uid.split(
                     "__"
                 )  # TODO: Define this "magic" string somewhere explicitly
-                stem_path = self.job_config.output_path / sub / ses
+                stem_path = output_dir / sub / ses
             # Otherwise, use the case output dir we already have
             else:
-                stem_path = case_output
+                stem_path = output_dir / uid
             # Add an "anat" dir to the end to meet BIDS requirements
             stem_path /= "anat"
         # Otherwise, just put it into the case output directory
         else:
-            stem_path = case_output
+            stem_path = output_dir / uid
 
         # Combine the two to get our file name
         output_file = stem_path / file_name
