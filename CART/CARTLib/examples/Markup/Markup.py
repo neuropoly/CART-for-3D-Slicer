@@ -166,14 +166,14 @@ class MarkupTask(TaskBaseClass[MarkupUnit]):
         uid = case_data.get("uid")
         case_overrides = {}
         if self._output_manager.is_unit_complete(self.master_profile.author, uid):
-            for k in case_data.keys():
+            for k, v in case_data.items():
                 # Skip non-markup resources
                 if not MarkupResource.is_type(k):
                     continue
                 output_file = self._output_manager.determine_output_file(
                     self.job_profile.output_path,
                     uid,
-                    None,
+                    v,
                     k,
                 )
                 if output_file.exists():
