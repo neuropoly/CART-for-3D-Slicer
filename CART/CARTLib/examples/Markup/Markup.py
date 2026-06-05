@@ -1,4 +1,6 @@
 import csv
+import json
+import logging
 from datetime import datetime
 from enum import Enum
 from functools import cached_property
@@ -111,12 +113,13 @@ class MarkupTask(TaskBaseClass[MarkupUnit]):
         self.markups: list[tuple[str, Optional[str]]] = []
         self.untracked_markups: dict[str, list[str]] = {}
 
-        # Output logging
-        self._output_manager: MarkupOutput = MarkupOutput()
-        self._output_manager.output_dir = self.job_profile.output_path
-
         # Config management
         self.config: MarkupConfig = MarkupConfig(parent_config=self.job_profile)
+
+        # Output logging
+        self._output_manager: MarkupOutput = MarkupOutput(
+            config=self.config, output_dir=self.job_profile.output_path
+        )
 
     def setup(self, container: qt.QWidget):
         # Initialize the GUI
@@ -188,9 +191,12 @@ class MarkupGUI:
 
 
 class MarkupOutput:
-    def __init__(self):
+    def __init__(self, config: "MarkupConfig", output_dir: Path = None):
+        # Reference config
+        self._config_reference = config
+
         # The directory to save everything into
-        self._output_dir: Path = None
+        self._output_dir: Path = output_dir
 
     @property
     def output_dir(self) -> Path:
@@ -284,12 +290,24 @@ class MarkupOutput:
                 else:
                     input_path = Path(input_path)
 
+            # Determine the appropriate extension for the file
+            if self._config_reference.output_format == MarkupOutputFormat.JSON:
+                # Markdown JSON is unique in that it gets two extensions
+                extension = "mrk.json"
+            elif self._config_reference.output_format == MarkupOutputFormat.NIFTI:
+                # Likewise, NIfTI is almost always saved compressed
+                extension = "nii.gz"
+            else:
+                # Remaining case is NRRD, which has no double-convention
+                extension = "nrrd"
+
             # If this is a node w/o a previous file name, save it as such
             if input_path is None:
-                file_name = f"{key}_unknown_{unknown_idx}.mrk.json"
+                file_name = f"{data_unit.uid}_{key}_{unknown_idx}.{extension}"
                 unknown_idx += 1
             else:
-                file_name = input_path.name
+                original_name = input_path.name.split(".")[0]
+                file_name = f"{original_name}.{extension}"
             output_file = case_output / file_name
 
             # Delete any previous sidecar file associated with our output to avoid unintentional carry-over
@@ -297,27 +315,41 @@ class MarkupOutput:
             prior_sidecar.unlink(missing_ok=True)
 
             # Save the node's contents to this file
-            if ".nii" in output_file.suffixes:
-                # Save the node to a NIfTI file, w/ a sidecar containing label data!
-                save_markups_to_nifti(
-                    markup_node=node,
-                    reference_volume=data_unit.reference_volume_node,
-                    path=output_file
-                )
-                saved_files.append(output_file)
-            elif ".mrk" in output_file.suffixes:
-                # Save the node to Slicer's native mrk.json format.
-                save_markups_to_json(
-                    markups_node=node,
-                    path=output_file
-                )
-                saved_files.append(output_file)
-            else:
+            try:
+                if self._config_reference.output_format == MarkupOutputFormat.NIFTI:
+                    # Save the node to a NIfTI file, w/ a sidecar containing label data!
+                    save_markups_to_nifti(
+                        markup_node=node,
+                        reference_volume=data_unit.reference_volume_node,
+                        path=output_file
+                    )
+                    saved_files.append(output_file)
+                else:
+                    # Save the node to Slicer's native mrk.json format.
+                    save_markups_to_json(
+                        markups_node=node,
+                        path=output_file
+                    )
+                    saved_files.append(output_file)
+            except Exception as e:
+                logging.error(f"Failed to save markup file {file_name}.", exc_info=e)
                 failed_files.append(output_file)
 
-            # Save the corresponding sidecar, extended w/ a new "GeneratedBy" entry
+            # Update (or create) the sidecar files.
             current_sidecar = find_json_sidecar_path(output_file)
-            sidecar_data = stack_sidecars(prior_sidecar, current_sidecar)
+            if current_sidecar.exists():
+                # If we already had an output file, update it
+                with open(current_sidecar, 'r') as fp:
+                    sidecar_data = json.load(fp)
+            elif input_path is not None:
+                # If the input file had a sidecar, copy and extend it
+                prior_sidecar = find_json_sidecar_path(input_path)
+                current_sidecar = find_json_sidecar_path(output_file)
+                sidecar_data = stack_sidecars(prior_sidecar, current_sidecar)
+            else:
+                # Otherwise, start from scratch
+                sidecar_data = {}
+            # Add the "generated by" entry and proceed
             add_generated_by_entry(sidecar_data, profile)
             save_json_sidecar(current_sidecar, sidecar_data)
 
@@ -438,55 +470,71 @@ class MarkupConfigGUILayout(qt.QFormLayout):
 
         # Output folder structure selection
         fileStructureComboBox = qt.QComboBox(None)
+        fileStructureToolTip = _(
+            "How the folders within the output directory should be organized."
+        )
+        fileStructureComboBox.setToolTip(fileStructureToolTip)
         fileStructureComboBox.addItems([x.value for x in MarkupOutputStructure])
         fileStructureComboBox.setCurrentText(config.output_structure.value)
         fileStructureLabel = qt.QLabel(_("Output File Structure:"))
+        fileStructureLabel.setToolTip(fileStructureToolTip)
         self.addRow(fileStructureLabel, fileStructureComboBox)
 
         # Output file structure selection
         fileFormatComboBox = qt.QComboBox(None)
+        fileFormatToolTip = _(
+            "What file format (of Slicer's supported options) the markups should be saved in."
+        )
+        fileFormatComboBox.setToolTip(fileFormatToolTip)
         fileFormatComboBox.addItems([x.value for x in MarkupOutputFormat])
         fileFormatComboBox.setCurrentText(config.output_structure.value)
         fileFormatLabel = qt.QLabel(_("Output File Format:"))
+        fileFormatLabel.setToolTip(fileFormatToolTip)
         self.addRow(fileFormatLabel, fileFormatComboBox)
 
         # Toggle-able options
         toggleLayout = qt.QFormLayout(None)
         self.addRow(toggleLayout)
 
-        ## Duplicate Markups
-        duplicateMarkupsCheckBox = qt.QCheckBox()
-        duplicateMarkupsCheckBox.setChecked(config.allow_duplicates)
-        duplicateMarkupsLabel = qt.QLabel(_("Allow Duplicate Markups"))
-        toggleLayout.addRow(duplicateMarkupsCheckBox, duplicateMarkupsLabel)
-
-        ## Hide To-Edit Segments on Load
-        hideEditSegmentsCheckBox = qt.QCheckBox()
-        hideEditSegmentsCheckBox.setChecked(config.hide_to_edit)
-        hideEditSegmentsLabel = qt.QLabel(
-            _("Initially Hide To-Edit Markups")
-        )
-        toggleLayout.addRow(
-            hideEditSegmentsCheckBox, hideEditSegmentsLabel
-        )
+        ## TODO
+        # ## Duplicate Markups
+        # duplicateMarkupsCheckBox = qt.QCheckBox()
+        # duplicateMarkupsCheckBox.setChecked(config.allow_duplicates)
+        # duplicateMarkupsLabel = qt.QLabel(_("Allow Duplicate Markups"))
+        # toggleLayout.addRow(duplicateMarkupsCheckBox, duplicateMarkupsLabel)
+        #
+        # ## Hide To-Edit Segments on Load
+        # hideEditSegmentsCheckBox = qt.QCheckBox()
+        # hideEditSegmentsCheckBox.setChecked(config.hide_to_edit)
+        # hideEditSegmentsLabel = qt.QLabel(
+        #     _("Initially Hide To-Edit Markups")
+        # )
+        # toggleLayout.addRow(
+        #     hideEditSegmentsCheckBox, hideEditSegmentsLabel
+        # )
 
         # Connections
         @qt.Slot(str)
         def onStructureChanged(new_val: str):
             config.output_structure = MarkupOutputStructure(new_val)
-        fileFormatComboBox.currentTextChanged.connect(onStructureChanged)
+        fileStructureComboBox.currentTextChanged.connect(onStructureChanged)
+        fileStructureComboBox.setCurrentText(config.output_structure.value)
 
         @qt.Slot(str)
         def onFormatChanged(new_val: str):
             config.output_format = MarkupOutputFormat(new_val)
         fileFormatComboBox.currentTextChanged.connect(onFormatChanged)
+        fileFormatComboBox.setCurrentText(config.output_format.value)
 
-        @qt.Slot(None)
-        def onDuplicatesToggled():
-            config.allow_duplicates = duplicateMarkupsCheckBox.isChecked()
-        duplicateMarkupsCheckBox.toggled.connect(onDuplicatesToggled)
-
-        @qt.Slot(None)
-        def onHideEditsToggled():
-            config.hide_to_edit = hideEditSegmentsCheckBox.isChecked()
-        hideEditSegmentsCheckBox.toggled.connect(onHideEditsToggled)
+        ## TODO
+        # @qt.Slot(None)
+        # def onDuplicatesToggled():
+        #     config.allow_duplicates = duplicateMarkupsCheckBox.isChecked()
+        # duplicateMarkupsCheckBox.toggled.connect(onDuplicatesToggled)
+        # duplicateMarkupsCheckBox.setChecked(config.allow_duplicates)
+        #
+        # @qt.Slot(None)
+        # def onHideEditsToggled():
+        #     config.hide_to_edit = hideEditSegmentsCheckBox.isChecked()
+        # hideEditSegmentsCheckBox.toggled.connect(onHideEditsToggled)
+        # hideEditSegmentsCheckBox.setChecked(config.hide_to_edit)
