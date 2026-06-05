@@ -962,7 +962,7 @@ class _DataSelectionPage(qt.QWizardPage):
         Walk the user through the creation of a new cohort file from scratch
         """
         # Prompt the user for the new cohort file's specifications
-        dialog = NewCohortDialog(self.data_path)
+        dialog = NewCohortDialog(self.data_path, self.output_path)
 
         # If the user backs out or cancels, end here
         if not dialog.exec():

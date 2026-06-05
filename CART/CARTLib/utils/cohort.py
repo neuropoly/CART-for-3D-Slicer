@@ -965,12 +965,14 @@ class NewCohortDialog(ChangeTrackingDialogue):
     def __init__(
         self,
         data_path: Path,
+        output_path: Optional[Path] = None,
         parent: qt.QObject = None,
     ):
         super().__init__(parent)
 
         # Track the data path for later
         self.data_path = data_path
+        self.output_path = output_path
 
         # Initial setup
         self.setWindowTitle(_("New Cohort"))
@@ -988,6 +990,8 @@ class NewCohortDialog(ChangeTrackingDialogue):
         )
         cohortNameLabel.setToolTip(cohortNameTooltip)
         cohortFileEdit.setToolTip(cohortNameTooltip)
+        # Placeholder and default text
+        cohortFileEdit.setCurrentPath("cohort.csv")
         cohortFileEdit.setPlaceholderText(_(
             "i.e. home/user/output.csv"
         ))
@@ -1037,7 +1041,7 @@ class NewCohortDialog(ChangeTrackingDialogue):
 
         # Connections
         @qt.Slot(str)
-        def onCohortChanged(new_txt: str):
+        def onCohortChanged(__: str):
             # Disable the button if the file changed
             self.validate()
             self.mark_changed()
@@ -1070,12 +1074,19 @@ class NewCohortDialog(ChangeTrackingDialogue):
         self.validate()
 
     @property
-    def cohort_file(self) -> Path:
+    def cohort_file(self) -> Optional[Path]:
         # Workaround to CTK not playing nicely w/ "registerField"
         path = self._cohortFileEdit.currentPath
-        if not path:
+        if path == '':
             return None
-        return Path(path)
+        # Conver the path into an absolute path, if need be
+        path = Path(path)
+        if path.is_absolute():
+            return path
+        elif self.output_path is None:
+            return None
+        else:
+            return self.output_path / path
 
     @property
     def current_generator(self) -> Optional[CaseGenerator]:
