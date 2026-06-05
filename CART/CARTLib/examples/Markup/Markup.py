@@ -24,7 +24,8 @@ from CARTLib.utils.data import (
     add_generated_by_entry,
     create_emtpy_markup_fiducial_node,
     load_markups,
-    MarkupResource
+    MarkupResource,
+    save_markups_to_csv,
 )
 from CARTLib.utils.task import cart_task
 from CARTLib.utils.widgets import CARTMarkupEditorWidget
@@ -298,8 +299,8 @@ class MarkupOutput:
                 # Likewise, NIfTI is almost always saved compressed
                 extension = "nii.gz"
             else:
-                # Remaining case is NRRD, which has no double-convention
-                extension = "nrrd"
+                # Remaining case is CSV, which has no double-convention
+                extension = "csv"
 
             # If this is a node w/o a previous file name, save it as such
             if input_path is None:
@@ -324,12 +325,13 @@ class MarkupOutput:
                         path=output_file
                     )
                     saved_files.append(output_file)
+                elif self._config_reference.output_format == MarkupOutputFormat.CSV:
+                    # Save the node to Slicer's native .csv format
+                    save_markups_to_csv(markups_node=node, path=output_file)
+                    saved_files.append(output_file)
                 else:
-                    # Save the node to Slicer's native mrk.json format.
-                    save_markups_to_json(
-                        markups_node=node,
-                        path=output_file
-                    )
+                    # Save the node to Slicer's native .mrk.json format
+                    save_markups_to_json(markups_node=node, path=output_file)
                     saved_files.append(output_file)
             except Exception as e:
                 logging.error(f"Failed to save markup file {file_name}.", exc_info=e)
@@ -396,7 +398,7 @@ class MarkupOutputStructure(Enum):
 
 class MarkupOutputFormat(Enum):
     NIFTI = "NIfTI"
-    NRRD = "NRRD"
+    CSV = "CSV"
     JSON = "JSON"
 
 
@@ -429,7 +431,7 @@ class MarkupConfig(DictBackedConfig):
     @property
     def output_format(self):
         str_val = self.get_or_default(
-            self.OUTPUT_FORMAT_KEY, MarkupOutputFormat.NRRD.value
+            self.OUTPUT_FORMAT_KEY, MarkupOutputFormat.CSV.value
         )
         return MarkupOutputFormat(str_val)
 
