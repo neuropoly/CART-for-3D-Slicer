@@ -1,6 +1,5 @@
 import csv
 import json
-import logging
 from datetime import datetime
 from enum import Enum
 from functools import cached_property
@@ -140,9 +139,8 @@ class MarkupTask(TaskBaseClass[MarkupUnit]):
             self.gui.sync()
 
     def save(self) -> Optional[str]:
-        msg = self._output_manager.save_unit(self.data_unit, self.master_profile)
-        if self.gui and msg is not None:
-            self.gui.saveSuccessPrompt(msg)
+        # Delegate to the output manager
+        self._output_manager.save_unit(self.data_unit, self.master_profile)
 
     def isTaskComplete(self, case_data: dict[str, str]) -> bool:
         author = self.master_profile.author
@@ -272,38 +270,34 @@ class MarkupOutput:
     def save_unit(self, data_unit: MarkupUnit, profile: MasterProfileConfig) -> str:
         # Define (and, if need be, create) an output folder for this unit's case ID
         case_output = self.output_dir / data_unit.uid
-        case_output.mkdir(parents=True, exist_ok=True)
 
-        # Save each markup node (with any modifications) into it
-        unknown_idx = 0
-        # TODO: Add user naming support for "custom" markups
-        saved_files = []
-        failed_files = []
-        for key, node in data_unit.markup_nodes.items():
-            # Determine how the file should be named
-            storage_node = node.GetStorageNode()
-            if storage_node is None:
-                input_path = None
-            else:
-                input_path = storage_node.GetFileName()
-                if input_path is None or input_path == "":
+        try:
+            # Save each markup node (with any modifications) into it
+            unknown_idx = 0
+            for key, node in data_unit.markup_nodes.items():
+                # Determine how the file should be named
+                storage_node = node.GetStorageNode()
+                if storage_node is None:
                     input_path = None
                 else:
-                    input_path = Path(input_path)
+                    input_path = storage_node.GetFileName()
+                    if input_path is None or input_path == "":
+                        input_path = None
+                    else:
+                        input_path = Path(input_path)
 
-            output_file = self.determine_output_file(
-                case_output, data_unit, input_path, key, unknown_idx
-            )
+                output_file = self.determine_output_file(
+                    case_output, data_unit, input_path, key, unknown_idx
+                )
 
-            # Create hte corresponding parent directory, if needed
-            output_file.parent.mkdir(exist_ok=True)
+                # Create the corresponding parent directory, if needed
+                output_file.parent.mkdir(parents=True, exist_ok=True)
 
-            # Delete any previous sidecar file associated with our output to avoid unintentional carry-over
-            prior_sidecar = find_json_sidecar_path(output_file)
-            prior_sidecar.unlink(missing_ok=True)
+                # Delete any previous sidecar file associated with our output to avoid unintentional carry-over
+                prior_sidecar = find_json_sidecar_path(output_file)
+                prior_sidecar.unlink(missing_ok=True)
 
-            # Save the node's contents to this file
-            try:
+                # Save the node's contents to this file
                 if self._config_reference.output_format == MarkupOutputFormat.NIFTI:
                     # Save the node to a NIfTI file, w/ a sidecar containing label data!
                     save_markups_to_nifti(
@@ -311,68 +305,63 @@ class MarkupOutput:
                         reference_volume=data_unit.reference_volume_node,
                         path=output_file
                     )
-                    saved_files.append(output_file)
                 elif self._config_reference.output_format == MarkupOutputFormat.CSV:
                     # Save the node to Slicer's native .csv format
                     save_markups_to_csv(markups_node=node, path=output_file)
-                    saved_files.append(output_file)
                 else:
                     # Save the node to Slicer's native .mrk.json format
                     save_markups_to_json(markups_node=node, path=output_file)
-                    saved_files.append(output_file)
-            except Exception as e:
-                logging.error(f"Failed to save markup file {output_file.name}.", exc_info=e)
-                failed_files.append(output_file)
 
-            # Update (or create) the sidecar files.
-            current_sidecar = find_json_sidecar_path(output_file)
-            if current_sidecar.exists():
-                # If we already had an output file, update it
-                with open(current_sidecar, 'r') as fp:
-                    sidecar_data = json.load(fp)
-            elif input_path is not None:
-                # If the input file had a sidecar, copy and extend it
-                prior_sidecar = find_json_sidecar_path(input_path)
+                # Update (or create) the sidecar files.
                 current_sidecar = find_json_sidecar_path(output_file)
-                sidecar_data = stack_sidecars(prior_sidecar, current_sidecar)
-            else:
-                # Otherwise, start from scratch
-                sidecar_data = {}
-            # Add the "generated by" entry and proceed
-            add_generated_by_entry(sidecar_data, profile)
-            save_json_sidecar(current_sidecar, sidecar_data)
+                if current_sidecar.exists():
+                    # If we already had an output file, update it
+                    with open(current_sidecar, 'r') as fp:
+                        sidecar_data = json.load(fp)
+                elif input_path is not None:
+                    # If the input file had a sidecar, copy and extend it
+                    prior_sidecar = find_json_sidecar_path(input_path)
+                    current_sidecar = find_json_sidecar_path(output_file)
+                    sidecar_data = stack_sidecars(prior_sidecar, current_sidecar)
+                else:
+                    # Otherwise, start from scratch
+                    sidecar_data = {}
+                # Add the "generated by" entry and proceed
+                add_generated_by_entry(sidecar_data, profile)
+                save_json_sidecar(current_sidecar, sidecar_data)
 
-        # Update our log file to match
-        log_entry_key = (profile.author, data_unit.uid)
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.log[log_entry_key] = {
-            self.AUTHOR_KEY: profile.author,
-            self.UID_KEY: data_unit.uid,
-            self.TIMESTAMP_KEY: timestamp,
-            self.OUTPUT_KEY: str(case_output.resolve()),
-            self.VERSION_KEY: VERSION,
-        }
-
-        # Save the new contents to file
-        with open(self.log_file, "w") as fp:
-            writer = csv.DictWriter(fp, fieldnames=self.LOG_HEADERS)
-            writer.writeheader()
-            writer.writerows(self.log.values())
-
-        # Build the result message
-        result_msg = ""
-        if len(saved_files) > 0:
-            result_msg += _("Saved the following files:\n")
-            for f in saved_files:
-                result_msg += f"  * {str(f)}\n"
-            result_msg += "\n"
-        if len(failed_files):
-            result_msg += _("Failed to save the following files:\n")
-            for f in failed_files:
-                result_msg += f"  * {str(f)}\n"
-            result_msg += "\n"
-
-        return result_msg
+            # Update our log file to match
+            log_entry_key = (profile.author, data_unit.uid)
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.log[log_entry_key] = {
+                self.AUTHOR_KEY: profile.author,
+                self.UID_KEY: data_unit.uid,
+                self.TIMESTAMP_KEY: timestamp,
+                self.OUTPUT_KEY: str(case_output.resolve()),
+                self.VERSION_KEY: VERSION,
+            }
+            # Save the new contents to file
+            with open(self.log_file, "w") as fp:
+                writer = csv.DictWriter(fp, fieldnames=self.LOG_HEADERS)
+                writer.writeheader()
+                writer.writerows(self.log.values())
+        except Exception as e:
+            log_entry_key = (profile.author, data_unit.uid)
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.log[log_entry_key] = {
+                self.AUTHOR_KEY: profile.author,
+                self.UID_KEY: data_unit.uid,
+                self.TIMESTAMP_KEY: timestamp,
+                self.OUTPUT_KEY: "ERROR",
+                self.VERSION_KEY: VERSION,
+            }
+            # Save the new contents to file
+            with open(self.log_file, "w") as fp:
+                writer = csv.DictWriter(fp, fieldnames=self.LOG_HEADERS)
+                writer.writeheader()
+                writer.writerows(self.log.values())
+            # Raise the error as normal
+            raise e
 
     def determine_output_file(
         self,
@@ -423,8 +412,13 @@ class MarkupOutput:
         output_file = stem_path / file_name
         return output_file
 
-    def is_unit_complete(self, author: str, uid: MarkupUnit):
-        return (author, uid) in self.log.keys()
+    def is_unit_complete(self, author: str, uid: str):
+        k = (author, uid)
+        entry = self.log.get(k)
+        if entry is None:
+            return None
+        else:
+            return entry[self.OUTPUT_KEY] != "ERROR"
 
 
 class MarkupOutputStructure(Enum):
