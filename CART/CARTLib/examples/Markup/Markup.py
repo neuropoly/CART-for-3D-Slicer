@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 import qt
+import slicer
 from slicer.i18n import tr as _
 
 from CARTLib.core.TaskBaseClass import TaskBaseClass
@@ -19,6 +20,9 @@ from CARTLib.utils.data import (
     stack_sidecars,
     save_json_sidecar,
     add_generated_by_entry,
+    create_emtpy_markup_fiducial_node,
+    load_markups,
+    MarkupResource
 )
 from CARTLib.utils.task import cart_task
 from CARTLib.utils.widgets import CARTMarkupEditorWidget
@@ -33,8 +37,48 @@ if TYPE_CHECKING:
 VERSION = "0.0.2"
 
 
+class MarkupUnit(CARTStandardUnit):
+    def _load_markups_nodes(self, markup_paths: dict[str, Path]) -> None:
+        # Ensure each "editable" markup has a corresponding node
+        for key, path in markup_paths.items():
+            # Try to read from file
+            if path is not None:
+                if path.exists():
+                    # Try to load the markups naturally first
+                    nodes = load_markups(path)
+                # If there was a path specified, but it no longer exists, raise an error
+                else:
+                    raise ValueError(
+                        f"Tried to load markup from path {path} which doesn't exist!"
+                    )
+
+            # If no file exists, create a blank markup node instead
+            else:
+                nodes = [create_emtpy_markup_fiducial_node(
+                    f"{key} [{self.uid}]",
+                    scene=self.scene,
+                )]
+
+            # Label the markups iteratively if there are multiple
+            should_iter = len(nodes) > 1
+            for i, node in enumerate(nodes):
+                # Error out if the node is the wrong type (currently only fiducials are supported)
+                if not isinstance(node, slicer.vtkMRMLMarkupsFiducialNode):
+                    raise TypeError(
+                        f"Expected a MarkupsFiducialNode, got {type(node)} for key {key}."
+                    )
+                # Determine how the node should be named
+                if should_iter:
+                    name = f"{MarkupResource.format_for_gui(key)} [{self.uid} - {i}]"
+                else:
+                    name = f"{key} [{self.uid}]"
+                # Update the node's properties and track it
+                node.SetName(name)
+                self.markup_nodes[key] = node
+
+
 @cart_task("Markup")
-class MarkupTask(TaskBaseClass[CARTStandardUnit]):
+class MarkupTask(TaskBaseClass[MarkupUnit]):
 
     README_PATH = Path(__file__).parent / "README.md"
 
@@ -61,7 +105,7 @@ class MarkupTask(TaskBaseClass[CARTStandardUnit]):
 
         # GUI and data unit
         self.gui: Optional[MarkupGUI] = None
-        self.data_unit: Optional[CARTStandardUnit] = None
+        self.data_unit: Optional[MarkupUnit] = None
 
         # Markup tracking
         self.markups: list[tuple[str, Optional[str]]] = []
@@ -83,7 +127,7 @@ class MarkupTask(TaskBaseClass[CARTStandardUnit]):
         if self.data_unit:
             self.gui.sync()
 
-    def receive(self, data_unit: CARTStandardUnit):
+    def receive(self, data_unit: MarkupUnit):
         # Update the data unit
         self.data_unit = data_unit
 
@@ -103,7 +147,7 @@ class MarkupTask(TaskBaseClass[CARTStandardUnit]):
 
     @classmethod
     def getDataUnitFactory(cls) -> DataUnitFactory:
-        return CARTStandardUnit
+        return MarkupUnit
 
     @classmethod
     def init_config(cls, job_config: JobProfileConfig) -> DictBackedConfig:
@@ -131,7 +175,7 @@ class MarkupGUI:
         self.markupEditor.refresh()
 
     @property
-    def data_unit(self) -> CARTStandardUnit:
+    def data_unit(self) -> MarkupUnit:
         return self.bound_task.data_unit
 
     def saveSuccessPrompt(self, msg_text: str):
@@ -218,7 +262,7 @@ class MarkupOutput:
 
         return log_data
 
-    def save_unit(self, data_unit: CARTStandardUnit, profile: MasterProfileConfig) -> str:
+    def save_unit(self, data_unit: MarkupUnit, profile: MasterProfileConfig) -> str:
         # Define (and, if need be, create) an output folder for this unit's case ID
         case_output = self.output_dir / data_unit.uid
         case_output.mkdir(parents=True, exist_ok=True)
@@ -230,11 +274,15 @@ class MarkupOutput:
         failed_files = []
         for key, node in data_unit.markup_nodes.items():
             # Determine how the file should be named
-            input_path = node.GetStorageNode().GetFileName()
-            if input_path is None or input_path == "":
+            storage_node = node.GetStorageNode()
+            if storage_node is None:
                 input_path = None
             else:
-                input_path = Path(input_path)
+                input_path = storage_node.GetFileName()
+                if input_path is None or input_path == "":
+                    input_path = None
+                else:
+                    input_path = Path(input_path)
 
             # If this is a node w/o a previous file name, save it as such
             if input_path is None:
@@ -305,7 +353,7 @@ class MarkupOutput:
 
         return result_msg
 
-    def is_unit_complete(self, author: str, uid: CARTStandardUnit):
+    def is_unit_complete(self, author: str, uid: MarkupUnit):
         return (author, uid) in self.log.keys()
 
 

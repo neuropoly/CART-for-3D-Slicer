@@ -744,7 +744,7 @@ def create_empty_segmentation_node(
     """
     Create an empty segmentation node with proper display node setup.
 
-    # TODO CREATE SUPPORT FOR KWARGS TO PASS TO THE DISPLAY NODE
+    TODO CREATE SUPPORT FOR KWARGS TO PASS TO THE DISPLAY NODE
 
     Args:
         name: Name for the segmentation node
@@ -771,6 +771,39 @@ def create_empty_segmentation_node(
     seg_node.SetReferenceImageGeometryParameterFromVolumeNode(reference_volume)
 
     return seg_node
+
+
+def create_emtpy_markup_fiducial_node(
+    name: str,
+    scene: Optional[slicer.vtkMRMLScene] = None
+) -> slicer.vtkMRMLMarkupsNode:
+    """
+    Create an empty (fiducial) markup node with proper display node setup.
+
+    TODO CREATE SUPPORT FOR KWARGS TO PASS TO THE DISPLAY NODE
+
+    Args:
+        name: Name for the markup node
+        scene: MRML scene to add the node to (defaults to slicer.mrmlScene)
+
+    Returns:
+        Empty markup node with a corresponding display node
+    """
+    if scene is None:
+        scene = slicer.mrmlScene
+
+    # Create the markup node
+    markup_node = slicer.vtkMRMLMarkupsFiducialNode()
+    markup_node.SetName(name)
+    scene.AddNode(markup_node)
+
+    # Create and set up display node
+    display_node = slicer.vtkMRMLMarkupsDisplayNode()
+    scene.AddNode(display_node)
+    markup_node.SetAndObserveDisplayNodeID(display_node.GetID())
+
+    # Return the result
+    return markup_node
 
 
 ## "Standard" Resource Types + Configs ##
