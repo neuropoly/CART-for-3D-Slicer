@@ -1484,10 +1484,20 @@ class ResourceEditorDialogue(ChangeTrackingDialogue):
         extensionLabel.setToolTip(extensionTooltip)
         extensionField.setToolTip(extensionTooltip)
         extensionField.setPlaceholderText(_("e.g. .nii.gz"))
-        extensionField.setText(".nii.gz")  # Default to NIfTI format
+        defaultExtension = ".nii.gz" # Default to NIfTI format
+        if resource_name:
+            resource = self._cohort.resource_map.get(resource_name)
+            prior_extension = resource.extension
+            if prior_extension is None:
+                extensionField.setText(defaultExtension)
+            else:
+                extensionField.setText(prior_extension)
+        else:
+            extensionField.setText(defaultExtension)
         self.extensionField = extensionField
         layout.addRow(extensionLabel, extensionField)
 
+        # Mark the cohort as being changed if any of the fields change
         includeField.textChanged.connect(self.mark_changed)
         excludeField.textChanged.connect(self.mark_changed)
         extensionField.textChanged.connect(self.mark_changed)
@@ -1746,6 +1756,9 @@ class ResourceEditorDialogue(ChangeTrackingDialogue):
             exclude=exclude_entries,
             extension=extension_string
         )
+
+        print("-" * 100)
+        print(filter_entry)
 
         # If this an updated resource, rename the resource to this new name
         if self._prior_resource is not None:
