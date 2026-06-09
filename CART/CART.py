@@ -370,6 +370,27 @@ class CARTWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         UNKNOWN_ICON = buttonPanel.style().standardIcon(qt.QStyle.SP_FileIcon)
         COMPLETED_ICON = buttonPanel.style().standardIcon(qt.QStyle.SP_DialogApplyButton)
         FAILED_ICON = buttonPanel.style().standardIcon(qt.QStyle.SP_MessageBoxCritical)
+        ERROR_ICON = buttonPanel.style().standardIcon(qt.QStyle.SP_MessageBoxWarning)
+
+        # Wrapper util for marking cases which had an error
+        def marksErrorCases(f):
+            @qt.Slot(None)
+            def _f():
+                # Run the function, tracking its start and end point
+                original_idx = self.logic.current_case_idx
+                f()
+                new_idx = self.logic.current_case_idx
+                # If there was no change, end here; another function updated the icon
+                if new_idx == original_idx:
+                    pass
+                # Otherwise, iterate through all cases and see if they're now marked as errors
+                min_idx = min([original_idx, new_idx])
+                max_idx = max([original_idx, new_idx])
+                print([i for i in range(min_idx, max_idx)])
+                for idx in range(min_idx, max_idx):
+                    if idx in self.logic.data_manager.failed_indices:
+                        caseSelector.setItemIcon(idx, ERROR_ICON)
+            return _f
 
         ## Previous Incomplete ##
         previousIncompleteButton = qt.QToolButton(None)
@@ -379,7 +400,9 @@ class CARTWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 f"Jump to the Previous Incomplete Case [{self.PREVIOUS_INCOMPLETE_CASE_HOTKEY}]"
             )
         )
-        previousIncompleteButton.clicked.connect(self.logic.previous_incomplete_case)
+
+        _previousIncompleteCaseFunc = marksErrorCases(self.logic.previous_incomplete_case)
+        previousIncompleteButton.clicked.connect(_previousIncompleteCaseFunc)
 
         ## Previous Button ##
         previousButton = qt.QToolButton(None)
@@ -387,13 +410,15 @@ class CARTWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         previousButton.setToolTip(
             _(f"Switch to the Previous Case [{self.PREVIOUS_CASE_HOTKEY}]")
         )
-        previousButton.clicked.connect(self.logic.previous_case)
+        _previousCaseFunc = marksErrorCases(self.logic.previous_case)
+        previousButton.clicked.connect(_previousCaseFunc)
 
         ## Next Button ##
         nextButton = qt.QToolButton(None)
         nextButton.setText(">")
         nextButton.setToolTip(_(f"Switch to the Next Case [{self.NEXT_CASE_HOTKEY}]"))
-        nextButton.clicked.connect(self.logic.next_case)
+        _nextCaseFunc = marksErrorCases(self.logic.next_case)
+        nextButton.clicked.connect(_nextCaseFunc)
 
         ## Next Incomplete ##
         nextIncompleteButton = qt.QToolButton(None)
@@ -401,7 +426,8 @@ class CARTWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         nextIncompleteButton.setToolTip(
             _(f"Jump to the Next Incomplete Case [{self.NEXT_INCOMPLETE_HOTKEY}]")
         )
-        nextIncompleteButton.clicked.connect(self.logic.next_incomplete_case)
+        _nextIncompleteCaseFunc = marksErrorCases(self.logic.next_incomplete_case)
+        nextIncompleteButton.clicked.connect(_nextIncompleteCaseFunc)
 
         ## Case Viewer/Selector ##
         caseSelector: qt.QComboBox = ctk.ctkComboBox(None)
@@ -413,9 +439,10 @@ class CARTWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             # Try to load the requested case
             try:
                 self.logic.select_case(idx)
-            # If it failed, rollback to the original case
+            # If it failed, rollback to the original case and mark the case as causing an error
             except Exception as e:
                 self.logic.select_case(prior_case_idx)
+                caseSelector.setItemIcon(idx, ERROR_ICON)
                 raise e
 
         caseSelector.currentIndexChanged.connect(selectCaseAt)

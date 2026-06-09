@@ -228,7 +228,7 @@ class DataManager:
 
         # Data
         self.case_data = list()
-        self.failed_indices = list()
+        self.failed_indices = set()
         self.feature_labels = list()
 
         # Current index being tracked; -1 indicates one hasn't been selected yet
@@ -404,6 +404,7 @@ class DataManager:
                     raise e
                 # Otherwise, move onto the "next" case and try again
                 else:
+                    self.failed_indices.add(idx)
                     new_idx = idx + iter_on_failure
                     logging.error(
                         f"Failed to load unit at index {idx}; trying {new_idx}.",
